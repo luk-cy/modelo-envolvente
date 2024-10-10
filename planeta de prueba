@@ -1,0 +1,5 @@
+myplanet = planet(2.98e27 , 6.68e8, disco, tau_double=3e11)
+print(myplanet.info())
+myplanet.determine_envelope_mass()
+myplanet.plot_figures()
+plt.savefig("figura_1.pdf")
