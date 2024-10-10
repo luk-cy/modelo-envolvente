@@ -1,0 +1,12 @@
+#librerias
+import numpy as np
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+from scipy import constants
+%pylab inline
+from matplotlib import animation
+from matplotlib.animation import FuncAnimation
+from IPython.display import HTML
+!apt-get install -y ffmpeg
+import pandas as pd
+from scipy.interpolate import interp1d
