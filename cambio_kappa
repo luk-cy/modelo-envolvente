@@ -1,0 +1,61 @@
+# Utilizando los parámetros base, se realiza el cálculo de la variación de la envolvente al variar kappa0
+resultados = {}
+
+for i, kappa0 in enumerate(geomspace(1e-9, 1e-5, 10)):  # Iteraciones sobre los valores de kappa
+    mypl = planet(4.5e27, 6.68e8, disco, kappa0= kappa0, tau_double= 3.75e12)  # Manteniendo mass_core y radius constantes
+    mypl.determine_envelope_mass()
+    mypl.info()
+
+    # Guardar los resultados en el diccionario, incluyendo tau_double
+    resultados[i] = {
+        'kappa0': kappa0,  # Guardar el valor de tau_double
+        'rho_r': mypl.rho_r,
+        'M_r': mypl.M_r,
+        'P_r': mypl.P_r,
+        'T_r': mypl.T_r,
+        'radius': mypl.radius,
+        'conv_r': mypl.conv_r,
+        'luminosity_r': mypl.luminosity_r
+    }
+
+    mypl.plot_figures()
+    # plt.savefig("figura_" + str(i).zfill(5) + ".png") # guardar figuras
+
+# Guardar los resultados en archivos separados para cada valor de tau_double
+for i, datos in resultados.items():
+    np.savetxt("resultados_kappa_" + str(i) + ".csv",
+               np.column_stack([datos['radius'], datos['rho_r'], datos['M_r'], datos['P_r'], datos['T_r'], datos['conv_r'], datos['luminosity_r']]),
+               header="radius rho_r M_r P_r T_r conv_r luminosity_r")
+
+# Función para encontrar el radio donde conv_r = 1
+def encontrar_radio_conv_1(radius, conv_r):
+    # Convertimos los datos a arrays de numpy
+    radius = np.array(radius)
+    conv_r = np.array(conv_r)
+    
+    # Encontrar índices donde conv_r cruza el valor 1
+    indices_cercanos = np.where((conv_r[:-1] < 1) & (conv_r[1:] > 1) | (conv_r[:-1] > 1) & (conv_r[1:] < 1))[0]
+
+    if len(indices_cercanos) > 0:
+        # Valores de conv_r y radio en los puntos cercanos al primer cruce
+        idx = indices_cercanos[0]  # Tomar solo el primer cruce
+        x0, x1 = conv_r[idx], conv_r[idx + 1]
+        y0, y1 = radius[idx], radius[idx + 1]
+        
+        # Interpolación lineal para encontrar el radio donde conv_r = 1
+        f_interp = interp1d([x0, x1], [y0, y1], assume_sorted=False)
+        radio_interp = f_interp(1)  # conv_r = 1
+        return radio_interp
+    else:
+        return None  # No se encontró un cruce
+
+# Guardar los radios interpolados y tau_double en archivos CSV
+for i, datos in resultados.items():
+    radio_conv_1 = encontrar_radio_conv_1(datos['radius'], datos['conv_r'])
+    
+    # Guardar en archivo CSV si se encuentra un radio interpolado
+    if radio_conv_1 is not None:
+        kappa0 = datos['kappa0']  # Recuperar tau_double desde el diccionario
+        np.savetxt("radio_conv_kappa_" + str(i) + ".csv",
+                   [[tau_double, radio_conv_1]],  # Guardar tau_double y radio interpolado
+                   header="kappa radius")
