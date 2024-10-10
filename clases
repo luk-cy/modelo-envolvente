@@ -1,0 +1,259 @@
+class disc:
+  def __init__ (self,temperature, density):
+    self.temperature = temperature
+    self.density = density
+class planet:
+  def __init__ (self,Mcore, Rcore, disk, numsteps=500, tau_double=3.15e13, mstar=1.9891e33, a=7.779e13, kappa0=1e-9):
+    ### constants
+    sb = 5.67e-5
+    R= 8.314e7
+    G = 6.67e-8
+    #mH2 = 60.08
+    mH2 = 2.3
+    gamma = 1.2
+    #parametros del impactor
+    imp_r = 10 #radio
+    imp_rho = 3.2 #densidad
+    imp_v = 5e4 #velocidad
+    evap = 8.08e22 #Calor latente del silice
+    ####
+
+    self.Mcore = Mcore
+    self.Rcore = Rcore
+    self.TInfinity = disk.temperature
+    self.RhoInfinity = disk.density
+    self.kappa0 = kappa0
+    self.numsteps = numsteps
+    self.mstar = mstar
+    self.a = a
+    self.Mdot = Mcore/tau_double
+    self.rhoplanet = Mcore/((4./3)*np.pi*Rcore**3)
+
+    self.Luminosity = G*Mcore*self.Mdot/Rcore
+    self.imp_mass = (imp_rho* 4* np.pi * imp_r**3 )/3
+    self.dkinetic = (self.imp_mass * imp_v**2)/2
+    self.dxi = self.imp_mass/3
+    self.tau_double = tau_double
+
+
+  def info (self):
+    print ("Planet mass ", self.Mcore, "g  (=", self.Mcore/5.97e27," MEarth)")
+    print ("Planet radius ", self.Rcore, "cm  (=", self.Rcore/6.378e8," REarth)")
+    print ("Planet density ", self.rhoplanet, " g/cm3")
+    print ("Planet luminosity ", self.Luminosity, " erg/s (=", self.Luminosity/3.846e33, " Sun luminosity)")
+    print ("Mass doubling time", self.tau_double, "  s (=", self.tau_double/(365.25*86400), "yr)")
+    print("Accretion Rate", self.Mdot,  "g / s", self.Mdot*3.1557e7/5.972e27, "masas terrestres/año")
+    print ("The planet is embedded in a disc with temperature ", self.TInfinity, " K")
+    print ("and density ", self.RhoInfinity, "g/cm3")
+
+  def __rhs(self, r,v):
+
+    ### constants
+    sb = 5.67e-5
+    R= 8.314e7
+    G = 6.67e-8
+    mH2 = 2.3
+    gamma = 1.4
+    #parametros del impactor
+    #imp_r = 10 #radio
+    #imp_rho = 3.2 #densidad
+    #imp_v = 5e4 #velocidad
+    #evap = 8.08e22 #Calor latente del silice
+    #### Diferential equations
+    L = self.Luminosity
+    kappa0 = self.kappa0
+    M,P,T, L = v
+#    M = np.exp(lM)
+    rho = (P*mH2)/(R*T)
+#    dlogmdr = 4.*np.pi*r**2*rho/M
+    dmdr = 4.*np.pi*r**2*rho
+#    dpdr = - (G*(M-(4/3*np.pi*r**3*self.RhoInfinity))*rho)/(r*r)
+    dpdr = - (G*M*rho)/(r*r)
+
+    #dL = (self.dkinetic - evap*self.dxi )*self.Mdot + (G*M*self.Mdot)/r**2 - (4*np.pi* r**2 *P)/rho
+    dL = 0
+    kappa = kappa0*rho**(2./3.)*T**3
+    rad = (3*kappa*L*P)/(64*np.pi*sb*G*M*T**4)
+    conv = rad/((gamma-1.)/gamma)
+    nabla_real = np.min([rad,(gamma-1.) / gamma])
+    dTdr = dpdr*(T/P)*nabla_real
+
+
+    return np.array([dmdr, dpdr, dTdr, dL]), conv
+
+#Integration method
+
+  def __rk4_step(self, r, v, dr):
+    """Realiza un paso del método de Runge-Kutta de cuarto orden (RK4)"""
+
+    k1, __ = self.__rhs(r, v)
+    k2, __ = self.__rhs(r + dr / 2, v + dr / 2 * k1)
+    k3, __ = self.__rhs(r + dr / 2, v + dr / 2 * k2)
+    k4, conv = self.__rhs(r + dr, v + dr * k3)
+
+    v_n = v + dr / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+
+    return v_n, conv
+
+
+  def integrate(self, Menvelope):
+
+    ## Universal constants
+    R= 8.314e7
+    G = 6.67e-8
+    mH2 = 2.3
+
+
+    # Hill radius
+    R_h = self.a*(self.Mcore/(3*self.mstar))**(1/3.)
+    # Bondi radius
+    R_b= (G*self.Mcore*mH2)/(R*self.TInfinity)
+
+    r_i = self.Rcore
+    r_f = np.min([R_h,R_b])
+    T0 = self.TInfinity
+    P0 = (R*T0*self.RhoInfinity)/mH2
+    M0 = self.Mcore + Menvelope
+    L0 = G*self.Mcore*self.Mdot/self.Rcore
+
+ #   v0 = np.array([np.log(M0), P0, T0, L0])
+    v0 = np.array([M0, P0, T0, L0])
+
+    # Generar secuencia geométrica de radios con el número de pasos especificado
+    r = np.geomspace(r_i, r_f, num=self.numsteps, endpoint=True)
+
+    v = np.empty((len(r), 4), dtype=float)
+    v[-1, ...] = v0  # Iniciar desde el radio exterior
+    conv = np.empty(len(r), dtype=float)
+
+
+    # Iterar sobre los radios y realizar la integración de afuera hacia adentro
+    for i in range(len(r) - 1, 0, -1):  # Iterar desde el último radio hasta el primero
+        dr = r[i-1] - r[i]  # Paso de integración, recuerda es de afuera hacia adentro
+        v[i - 1, ...], conv[i] = self.__rk4_step(r[i], v[i, ...], dr)
+
+   #Results
+    self.rho_r = (v[:, 1] * mH2) / (R * v[:, 2])
+  #  self.M_r = np.exp(v[:, 0])
+    self.M_r = v[:, 0]
+    self.P_r = v[:, 1]
+    self.T_r = v[:,2]
+    self.radius = r
+    self.conv_r = conv
+    self.luminosity_r = v[:,3]
+    print(self.M_r[0]-self.Mcore)
+    return self.M_r[0]-self.Mcore
+
+  def plot_error_function_of_assumed_Menvelope (self):
+    Mmin = self.Mcore/1e5
+    Mmax = self.Mcore*1e1
+    m = np.geomspace(Mmin,Mmax, 100)
+    err = []
+    for mass in m:
+      err.append(self.integrate(mass))
+    plt.semilogx(m/self.Mcore,err)
+    plt.axhline(0.0)
+
+  def determine_envelope_mass(self, M_initial=0.5):
+    M_current = self.Mcore * M_initial
+    n_iterations = 0
+    tolerance = 1e-11 * self.Mcore
+    max_iterations = 1000  # Para evitar bucles infinitos
+
+    while n_iterations < max_iterations:
+        err = self.integrate(M_current)
+        d_err_dM = (self.integrate(M_current + tolerance) - err) / tolerance  # Derivada numérica
+
+        if abs(d_err_dM) < 1e-12:
+            print("saliendo del método después de N iterations porque la derivada es pequeña = " , n_iterations, d_err_dM) # Si la derivada es muy pequeña, posible estancamiento
+            break
+
+        M_next = M_current - err / d_err_dM
+
+        if abs(M_next - M_current) < tolerance*1e-3:
+            print("saliendo del método después de N iterations = " , n_iterations)
+            break
+
+        M_current = M_next
+        n_iterations += 1
+    #print("N iterations = ", n_iterations)
+    self.envelope_mass = M_current / self.Mcore
+    return self.envelope_mass
+
+  def get_convective_zone(self):
+        if np.any(self.conv_r > 1.0):
+            b = np.where(self.conv_r > 1.0)
+            radconv = self.radius[b] / self.Rcore
+            return radconv.min(), radconv.max()
+        else:
+            return None, None
+
+  def plot_figures(self):
+
+     # Determinar la zona convectiva
+     conv_min, conv_max = self.get_convective_zone()
+
+     # Crear figura y ejes para subplots
+     fig, axs = plt.subplots(2, 2, figsize=(14, 12))
+
+     # Ajustes generales de la estética
+     params = {'legend.fontsize': 12, 'axes.labelsize': 14, 'axes.titlesize': 16, 'xtick.labelsize': 12, 'ytick.labelsize': 12}
+     plt.rcParams.update(params)
+
+     # Colores
+    # color_zone = "#e45f46"
+     #color_zone = '#556B2F'  #  para zona convectiva
+     color_zone = "#DAF7A6"
+     edge_color = '#7E450E'  # Borde oscuro para destacar la zona
+     alpha_zone = 0.3
+
+     # Ploteo de masa
+     axs[0, 0].loglog((self.radius[1:] - self.Rcore) / self.Rcore, self.M_r[1:] - self.Mcore, color="#7E450E", lw=2, label='Masa')
+     if conv_min and conv_max:
+        axs[0, 0].axvspan(conv_min - 1, conv_max - 1, facecolor=color_zone, edgecolor=edge_color, alpha=alpha_zone, zorder=-100, label='Zona Convectiva')
+     axs[0, 0].set_xlabel('Log ((Radio - Rcore) / Rcore)')
+     axs[0, 0].set_ylabel('Log Masa [g]')
+     axs[0, 0].set_title('Perfil de Masa')
+     axs[0, 0].set_xlim(np.min((self.radius[1:] - self.Rcore) / self.Rcore), np.max((self.radius[1:] - self.Rcore) / self.Rcore))
+     axs[0, 0].legend(loc='best')
+     axs[0, 0].grid(True, linestyle='--', alpha=0.5)
+
+    # Ploteo de densidad
+     axs[0, 1].loglog((self.radius - self.Rcore) / self.Rcore, self.rho_r, color="#FF7F50", lw=2, label='Densidad')
+     if conv_min and conv_max:
+        axs[0, 1].axvspan(conv_min - 1, conv_max - 1, facecolor=color_zone, edgecolor=edge_color, alpha=alpha_zone, zorder=-100, label='Zona Convectiva')
+     axs[0, 1].set_xlabel('Log ((Radio - Rcore) / Rcore)')
+     axs[0, 1].set_ylabel('Log Densidad [g/cm³]')
+     axs[0, 1].set_title('Perfil de Densidad')
+
+# Establecer límites del eje x
+     axs[0, 1].set_xlim(max(1e-2, np.min((self.radius - self.Rcore) / self.Rcore)), np.max((self.radius - self.Rcore) / self.Rcore))
+     axs[0, 1].legend(loc='best')
+     axs[0, 1].grid(True, linestyle='--', alpha=0.5)
+     # Ploteo de temperatura
+     axs[1, 0].loglog(self.radius / self.Rcore, self.T_r, color="#FF7F53", lw=2, label='Temperatura')
+     if conv_min and conv_max:
+        axs[1, 0].axvspan(conv_min, conv_max, facecolor=color_zone, edgecolor=edge_color, alpha=alpha_zone, zorder=-100, label='Zona Convectiva')
+     sb_surface = (self.Luminosity / (4 * np.pi * self.Rcore ** 2 * 5.67e-5)) ** 0.25
+     axs[1, 0].axhline(sb_surface, color="#46aee4", linestyle='--', lw=2, label='Superficie Stefan-Boltzmann')
+     axs[1, 0].set_xlabel('Log Radio / Rcore')
+     axs[1, 0].set_ylabel('Log Temperatura [K]')
+     axs[1, 0].set_title('Perfil de Temperatura')
+     axs[1, 0].set_xlim(np.min(self.radius[1:] / self.Rcore), np.max(self.radius[1:] / self.Rcore))
+     axs[1, 0].legend(loc='best')
+     axs[1, 0].grid(True, linestyle='--', alpha=0.5)
+
+     # Ploteo de presión
+     axs[1, 1].loglog(self.radius / self.Rcore, self.P_r, color="#13BCB7", lw=2, label='Presión')
+     if conv_min and conv_max:
+        axs[1, 1].axvspan(conv_min, conv_max, facecolor=color_zone, edgecolor=edge_color, alpha=alpha_zone, zorder=-100, label='Zona Convectiva')
+     axs[1, 1].set_xlabel('Log Radio / Rcore')
+     axs[1, 1].set_ylabel('Log Presión [dyn/cm²]')
+     axs[1, 1].set_title('Perfil de Presión')
+     axs[1, 1].set_xlim(np.min(self.radius / self.Rcore), np.max(self.radius / self.Rcore))
+     axs[1, 1].legend(loc='best')
+     axs[1, 1].grid(True, linestyle='--', alpha=0.5)
+
+     # Ajustar espacios y mostrar la figura
+     plt.tight_layout()
+     plt.show()
