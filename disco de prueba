@@ -1,4 +1,1 @@
-class disc:
-  def __init__ (self,temperature, density):
-    self.temperature = temperature
-    self.density = density
+disco = disc(150,5e-11)
